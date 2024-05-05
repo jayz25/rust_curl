@@ -1,4 +1,4 @@
-use std::{env, process};
+use std::{env, io::{Read, Write}, net::TcpStream, process};
 use url::Url;
 
 #[derive(Debug)]
@@ -13,6 +13,7 @@ enum Flag {
 fn main() {
     
     let mut args = env::args();
+    args.next();
     let mut flags = Vec::new();
     let header_flags: Vec<&str> = vec![
         "-H", "--header"
@@ -26,7 +27,6 @@ fn main() {
     let help_flags: Vec<&str> = vec![
         "-h", "--help"
     ];
-
     loop {
         match args.next() {
             Some(element) => {
@@ -93,12 +93,49 @@ fn main() {
         }
     }).unwrap_or("GET");
 
+    let data = flags.iter().find_map(|flag| {
+        match flag  {
+            Flag::Data(flag) => Some(flag.as_str()),
+            _ => None,
+        }
+    }).unwrap_or("");
+
     // TODO: if Flag is your own type, give it a fn as_method(&self) -> Option<&str> to shorten this
     // let method = flags.iter().find_map(|f| f.as_method()).unwrap_or("GET");
 
     let (protocol, host, port, path) = parse_url(url);
 
-    let request_string = construct_get_request(protocol, host, port, path, method, headers);
+    let raw_request = construct_get_request(protocol, host, port, path, method, headers, data);
+    let socket_address = format!("{}:{}", host, port);
+    let tcp = TcpStream::connect(socket_address);
+
+    match tcp {
+        Ok(mut stream) => {
+            stream
+                .write_all(raw_request.as_bytes())
+                .expect("Failed to write data to stream");
+            
+            let mut buffer =vec![0; 2048];
+
+            stream
+                .read_to_end(&mut buffer)
+                .expect("Failed to read response from host");
+
+            let response = String::from_utf8_lossy(&buffer[..]);
+
+            let (response_header, response_data) = parse_response(&response);
+            println!("RESPONSE: {:?}", response_data);
+        }
+        Err(e) => {
+            eprintln!("Failed to establish a connection: {}", e)
+        }
+    }
+
+}
+
+pub fn parse_response(response: &str) -> (&str, &str) {
+    let (response_header, response_data) = response.split_once("\r\n\r\n").unwrap();
+    (response_header, response_data)
 }
 
 pub fn is_valid_url(url: &str) -> bool {
@@ -139,14 +176,35 @@ pub fn parse_url(url: &str) -> (&str, &str, &str, &str) {
     (protocol, host, port, path)
 }
 
-pub fn construct_get_request(protocol: &str, host: &str, port: &str, path: &str, method: &str, headers: Vec<&str>) {
+pub fn get_protocol(protocol: &str) -> &str {
+    // Temporary: Refactor this, since both arms are same
+    match protocol {
+        "http" => "HTTP/1.1",
+        _ => "HTTP/1.1"
+    }
+}
+pub fn construct_get_request(protocol: &str, host: &str, port: &str, path: &str, method: &str, headers: Vec<&str>, data: &str) -> String{
     let mut res: String = String::new();
     
-    res += &format!("{} {}:{}/{} \r\n", method, host, port, path);
-    res += &format!("Protocol: {}\r\n", protocol);
+    res += &format!("{} /{} {}\r\n", method, path, get_protocol(protocol));
     res += &format!("Host: {}\r\n", host);
     res += "Accept: */*\r\n";
     res += "Connection: close \r\n";
+    res += "User-Agent: MyRustClient/1.0 \r\n";
 
-    println!("{}", res);
+    if method == "PUT" || method == "POST" {
+        if headers.len() > 0 {
+            for header in headers {
+                res += header;
+            }
+        } else {
+            res += "Content-Type: application/json\r\n"
+        }
+        let data_bytes = data.as_bytes();
+        res += &format!("Content-Length: {} \r\n\r\n", data_bytes.len());
+        res += data;
+        res += "\r\n";
+    }
+    res += "\r\n";
+    res
 }
