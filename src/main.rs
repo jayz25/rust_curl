@@ -7,6 +7,7 @@ enum Flag {
     Method(String),
     Data(String),
     Url(String),
+    Verbose,
     Help,
 }
 
@@ -27,6 +28,10 @@ fn main() {
     let help_flags: Vec<&str> = vec![
         "-h", "--help"
     ];
+    let verbose_flags: Vec<&str> = vec![
+        "-v", "--verbose"
+    ];
+
     loop {
         match args.next() {
             Some(element) => {
@@ -51,6 +56,10 @@ fn main() {
 
                     element if help_flags.contains(&element.as_str()) => {
                         flags.push(Flag::Help);
+                    },
+
+                    element if verbose_flags.contains(&&element.as_str()) => {
+                        flags.push(Flag::Verbose);
                     },
 
                     _ => {
@@ -108,9 +117,21 @@ fn main() {
     let raw_request = construct_get_request(protocol, host, port, path, method, headers, data);
     let socket_address = format!("{}:{}", host, port);
     let tcp = TcpStream::connect(socket_address);
+    let is_verbose = flags.iter().find_map(|flag| {
+        match flag {
+            Flag::Verbose => Some(true),
+            _ => None
+        }
+    }).unwrap_or(false);
 
     match tcp {
         Ok(mut stream) => {
+            if is_verbose {
+                let lines = raw_request.lines();
+                for line in lines {
+                    println!("> {}", line);
+                }
+            }
             stream
                 .write_all(raw_request.as_bytes())
                 .expect("Failed to write data to stream");
@@ -124,7 +145,13 @@ fn main() {
             let response = String::from_utf8_lossy(&buffer[..]);
 
             let (response_header, response_data) = parse_response(&response);
-            println!("RESPONSE: {:?}", response_data);
+            if is_verbose {
+                let lines = response_header.split("\r\n");
+                for line in lines {
+                    println!("< {}", line);
+                }
+            }
+            println!("{}", response_data);
         }
         Err(e) => {
             eprintln!("Failed to establish a connection: {}", e)
